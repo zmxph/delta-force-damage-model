@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.csv.tmp
+
+# 生成/二进制产物
+*.xlsx
+hit_replay.html
+
+# 原始录屏与剪辑工程（体积大且含版权素材）
+*.aac
+*.mp4
+*.prproj
+"Adobe Premiere Pro Auto-Save"/
+SVCH射速/
+连发枪械/
+
+# 概率长表之外的历史产物（不收录）
+ttk_btk.py
+ttk_btk.csv
+ttk_btk_4级(110).csv
+ttk_btk_5级(125).csv
+对比_可杀组合归属_普通四弹.csv
+*.docx
+示例.xlsx

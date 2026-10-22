@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" width="900" height="560" font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">
+  <rect width="900" height="560" fill="#ffffff"/>
+
+  <text x="40" y="44" font-size="22" font-weight="700" fill="#111827">落点判定与散布模型</text>
+  <text x="40" y="70" font-size="13" fill="#6b7280">《三角洲行动》枪械命中判定与弹着散布（hit_sim.py 模型 A）</text>
+
+  <!-- 主图：与 hit_sim.py 同一套几何（RECTS / BANDS / RINGS） -->
+  <g transform="translate(60,100) scale(115) translate(1.15,1.26)">
+    <ellipse cx="0" cy="0" rx="1.02" ry="1.18932" fill="#f7f9fc"/>
+
+    <!-- 底板：人体轮廓 -->
+    <rect x="-0.29" y="-1.203" width="0.548" height="0.532" fill="#e5e9f0" stroke="#cfd6e2" stroke-width="0.008"/>
+    <rect x="-0.332" y="-0.666" width="0.653" height="0.405" fill="#e5e9f0" stroke="#cfd6e2" stroke-width="0.008"/>
+    <rect x="-0.337" y="-0.229" width="0.653" height="0.705" fill="#e5e9f0" stroke="#cfd6e2" stroke-width="0.008"/>
+    <line x1="-0.479" y1="-0.476" x2="-0.858" y2="0.524" stroke="#e5e9f0" stroke-width="0.26" stroke-linecap="round"/>
+    <line x1="0.479" y1="-0.476" x2="0.858" y2="0.524" stroke="#e5e9f0" stroke-width="0.26" stroke-linecap="round"/>
+    <line x1="-0.218" y1="0.476" x2="-0.218" y2="1.776" stroke="#e5e9f0" stroke-width="0.342" stroke-linecap="round"/>
+    <line x1="0.279" y1="0.476" x2="0.279" y2="1.776" stroke="#e5e9f0" stroke-width="0.342" stroke-linecap="round"/>
+
+    <!-- 部位判定区 -->
+    <rect x="-0.29" y="-1.203" width="0.548" height="0.532" fill="#e74c3c" fill-opacity="0.18" stroke="#e74c3c" stroke-width="0.008"/>
+    <rect x="-0.332" y="-0.666" width="0.653" height="0.405" fill="#e67e22" fill-opacity="0.18" stroke="#e67e22" stroke-width="0.008"/>
+    <rect x="-0.337" y="-0.229" width="0.653" height="0.705" fill="#f1c40f" fill-opacity="0.20" stroke="#f1c40f" stroke-width="0.008"/>
+    <line x1="-0.479" y1="-0.476" x2="-0.858" y2="0.524" stroke="#3498db" stroke-opacity="0.35" stroke-width="0.26" stroke-linecap="round"/>
+    <line x1="0.479" y1="-0.476" x2="0.858" y2="0.524" stroke="#3498db" stroke-opacity="0.35" stroke-width="0.26" stroke-linecap="round"/>
+    <line x1="-0.218" y1="0.476" x2="-0.218" y2="1.776" stroke="#9b59b6" stroke-opacity="0.35" stroke-width="0.342" stroke-linecap="round"/>
+    <line x1="0.279" y1="0.476" x2="0.279" y2="1.776" stroke="#9b59b6" stroke-opacity="0.35" stroke-width="0.342" stroke-linecap="round"/>
+
+    <!-- 主散布：4 条同心椭圆，环心逐环上移 -->
+    <ellipse cx="0" cy="0" rx="1.0" ry="1.166" fill="none" stroke="#d9534f" stroke-width="0.020" opacity="0.90"/>
+    <ellipse cx="0" cy="-0.103" rx="0.816" ry="0.953" fill="none" stroke="#d9534f" stroke-width="0.013" opacity="0.70"/>
+    <ellipse cx="0" cy="-0.221" rx="0.584" ry="0.65" fill="none" stroke="#d9534f" stroke-width="0.013" opacity="0.70"/>
+    <ellipse cx="0" cy="-0.271" rx="0.395" ry="0.479" fill="none" stroke="#d9534f" stroke-width="0.013" opacity="0.70"/>
+
+    <!-- 准星中心 -->
+    <line x1="-0.05" y1="0" x2="0.05" y2="0" stroke="#d9534f" stroke-width="0.012"/>
+    <line x1="0" y1="-0.05" x2="0" y2="0.05" stroke="#d9534f" stroke-width="0.012"/>
+  </g>
+
+  <!-- 主图部位标注 -->
+  <text x="190" y="142" font-size="14" font-weight="600" fill="#7f2318" text-anchor="middle">头</text>
+  <text x="192" y="197" font-size="14" font-weight="600" fill="#7a3b0c" text-anchor="middle">胸</text>
+  <text x="191" y="264" font-size="14" font-weight="600" fill="#7a5c00" text-anchor="middle">腹</text>
+  <text x="104" y="252" font-size="13" font-weight="600" fill="#1c5f86" text-anchor="middle">手</text>
+  <text x="160" y="379" font-size="13" font-weight="600" fill="#5b2d78" text-anchor="middle">腿</text>
+  <text x="286" y="132" font-size="12" fill="#6b7280">空枪</text>
+  <line x1="300" y1="128" x2="286" y2="139" stroke="#9ca3af" stroke-width="1"/>
+  <line x1="300" y1="128" x2="292" y2="122" stroke="#9ca3af" stroke-width="1"/>
+
+  <!-- 右侧说明 -->
+  <text x="380" y="112" font-size="16" font-weight="700" fill="#111827">① 散布环带</text>
+  <text x="380" y="140" font-size="13" fill="#374151">4 条同心椭圆（外→内 100% / 82% / 58% / 40%）</text>
+  <text x="380" y="162" font-size="13" fill="#374151">最内圈 50%，外三环各 ≈16.7%；环心逐环上移</text>
+  <text x="380" y="184" font-size="13" fill="#374151">椭圆外区域 = 空枪（不计伤害）</text>
+
+  <text x="380" y="232" font-size="16" font-weight="700" fill="#111827">② 模型 A：后继弹锚定散布</text>
+  <g>
+    <circle cx="450" cy="320" r="62" fill="#e08a3c" fill-opacity="0.10" stroke="#e08a3c" stroke-width="1.4"/>
+    <circle cx="450" cy="320" r="53.8" fill="#e08a3c" fill-opacity="0.14" stroke="#e08a3c" stroke-width="1.2"/>
+    <circle cx="450" cy="320" r="38.5" fill="#e08a3c" fill-opacity="0.18" stroke="#e08a3c" stroke-width="1.2"/>
+    <circle cx="450" cy="320" r="26.1" fill="#e08a3c" fill-opacity="0.24" stroke="#e08a3c" stroke-width="1.2"/>
+    <circle cx="450" cy="320" r="4.5" fill="#d9534f" stroke="#ffffff" stroke-width="1.5"/>
+    <text x="462" y="324" font-size="11" fill="#6b7280">锚点</text>
+    <text x="450" y="398" font-size="11" fill="#9ca3af" text-anchor="middle">半径 = 主散布水平半轴 × 0.35</text>
+  </g>
+  <text x="530" y="266" font-size="12.5" fill="#374151">锚点 = 最近一次命中 / 重锚落点</text>
+  <text x="530" y="288" font-size="12.5" fill="#374151">后继弹以锚点为圆心、半径 ×0.35 的正圆散布</text>
+  <text x="530" y="310" font-size="12.5" fill="#374151">环带权重（外→内）10% / 20% / 30% / 40%</text>
+  <text x="530" y="332" font-size="12.5" fill="#374151">连续 2 发空枪后下一发回主散布重取锚点</text>
+  <text x="530" y="354" font-size="12.5" fill="#374151">（回放页用红虚线圈标注该重锚发）</text>
+
+  <text x="380" y="428" font-size="16" font-weight="700" fill="#111827">③ 部位判定</text>
+  <text x="380" y="456" font-size="13" fill="#374151">头 / 胸 / 腹 = 矩形；左右臂 / 左右腿 = 胶囊（线段 + 半宽）</text>
+  <text x="380" y="478" font-size="13" fill="#374151">重叠处先判矩形后判环带，腹下缘月牙区归「腹」；其余 = 空枪</text>
+
+  <!-- 图例 -->
+  <g font-size="12" fill="#4b5563">
+    <rect x="60" y="500" width="12" height="12" rx="2" fill="#e74c3c" fill-opacity="0.55" stroke="#e74c3c"/><text x="78" y="510">头</text>
+    <rect x="128" y="500" width="12" height="12" rx="2" fill="#e67e22" fill-opacity="0.55" stroke="#e67e22"/><text x="146" y="510">胸</text>
+    <rect x="196" y="500" width="12" height="12" rx="2" fill="#f1c40f" fill-opacity="0.60" stroke="#f1c40f"/><text x="214" y="510">腹</text>
+    <rect x="264" y="500" width="12" height="12" rx="2" fill="#3498db" fill-opacity="0.45" stroke="#3498db"/><text x="282" y="510">手</text>
+    <rect x="332" y="500" width="12" height="12" rx="2" fill="#9b59b6" fill-opacity="0.45" stroke="#9b59b6"/><text x="350" y="510">腿</text>
+    <rect x="400" y="500" width="12" height="12" rx="2" fill="#6b7280" fill-opacity="0.35" stroke="#6b7280"/><text x="418" y="510">空枪</text>
+  </g>
+
+  <text x="40" y="548" font-size="11.5" fill="#9ca3af">几何常量与 hit_sim.py 中的 RECTS / BANDS / RINGS / FOLLOW_* 一一对应，示意图由回放页同一套坐标生成。</text>
+</svg>
