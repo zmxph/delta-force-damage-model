@@ -31,13 +31,14 @@
 """
 import argparse
 import csv
+import math
 import os
 import sys
 from dataclasses import dataclass, replace
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 GUNS_CSV = os.path.join(BASE_DIR, "guns.csv")
-AMMO_CSV = os.path.join(BASE_DIR, "ammo1.csv")
+AMMO_CSV = os.path.join(BASE_DIR, "ammo.csv")
 ARMOR_CSV = os.path.join(BASE_DIR, "armor.csv")
 
 PARTS = ["头", "胸", "腹", "手", "腿", "肩"]
@@ -57,6 +58,7 @@ class Gun:
     部位覆盖: set        # 弹药绝对覆盖的部位(忽略枪械倍率)
     部位相对: dict       # ×开头的部位: 相对系数, 乘在枪械倍率上
     距离衰减: list       # [(起始距离, 系数), ...] 升序
+    弹速: float = None   # 弹丸初速 m/s (该行默认配置), 用于飞行时间
     备注: str = ""
 
 
@@ -157,6 +159,7 @@ def load_guns(path=GUNS_CSV):
                 部位覆盖=覆盖,
                 部位相对=相对,
                 距离衰减=parse_falloff(_cell(row, "距离衰减"), name),
+                弹速=_num(row, "弹速(m/s)", name, required=False),
                 备注=_cell(row, "备注"),
             )
     return guns
@@ -242,6 +245,13 @@ def 距离系数(gun, dist):
         else:
             break
     return factor
+
+
+def 飞行时间(gun, dist):
+    """弹丸飞行时间(s) = 距离 / 初速。无初速数据时返回 0（不计弹速）。"""
+    if not gun.弹速:
+        return 0.0
+    return float(dist) / float(gun.弹速)
 
 
 def 穿透比例(弹级, 甲级):
@@ -341,6 +351,49 @@ def 部位对应护甲(part, 身甲=None, 头盔=None):
     return None          # 腹/肩未防护 或 手/腿 无护甲
 
 
+def 序列结算(gun, ammo, parts, dist, 身甲=None, 头盔=None, 玩家生命=PLAYER_HP):
+    """按命中顺序结算一组混合部位（可跨头/身两个护甲池各自独立损耗）。
+    头→头盔池, 胸与受防护的腹/肩→身甲池, 手/腿→无甲; 破甲后该发的溢出部分按无甲 100% 结算。
+    返回 (剩余生命, 剩余身甲, 剩余头盔)。"""
+    甲值 = {"身": 身甲.护甲值 if 身甲 else 0.0, "头": 头盔.护甲值 if 头盔 else 0.0}
+    hp = 玩家生命
+    for p in parts:
+        a = 部位对应护甲(p, 身甲, 头盔)
+        if a is None:
+            hp -= 单发结算(gun, ammo, p, dist)[0]
+            continue
+        肉伤, 甲伤, _ = 单发结算(gun, ammo, p, dist, a.等级, 甲值[a.部位])
+        hp -= 肉伤
+        甲值[a.部位] = max(0.0, 甲值[a.部位] - 甲伤)
+    return hp, 甲值["身"], 甲值["头"]
+
+
+def 防致死耐久(gun, ammo, parts, dist, 身甲等级, 头甲等级=None, 头甲值=0.0, 护腹=True, 护肩=False, cap=400.0, 迭代=50):
+    """二分“身甲耐久”, 求恰好打光玩家生命的最大耐久 (恰好致死即临界)。
+    返回 (耐久 | None=永不成立, 是否顶到 cap)。护腹/护肩按口径显式传入,
+    不继承某个具体型号的标记; 头盔单独传入等级与耐久。"""
+
+    def 剩余(D):
+        身 = Armor(名称=f"{身甲等级}级身甲(临界)", 部位="身", 等级=身甲等级, 护甲值=D,
+                  防护腹部=1 if 护腹 else 0, 防护肩部=1 if 护肩 else 0)
+        头 = (Armor(名称=f"{头甲等级}级头盔(临界)", 部位="头", 等级=头甲等级, 护甲值=头甲值,
+                    防护腹部=0, 防护肩部=0) if 头甲等级 else None)
+        return 序列结算(gun, ammo, parts, dist, 身, 头)[0]
+
+    if 剩余(0.0) > 0:
+        return None, False
+    if 剩余(cap) <= 0:
+        return cap, True
+    lo, hi = 0.0, cap
+    for _ in range(迭代):
+        mid = (lo + hi) / 2.0
+        if 剩余(mid) <= 0:
+            lo = mid
+        else:
+            hi = mid
+    return lo, False
+
+
 def 击杀模拟(gun, ammo, part, dist, 护甲=None, 玩家生命=PLAYER_HP, 上限=600):
     """护甲为击中部位对应的护甲(Armor或None)。返回 (枪数, 用时s|None, 剩余生命, 剩余甲值, 逐枪记录)"""
     甲值 = 护甲.护甲值 if 护甲 else 0.0
@@ -355,6 +408,82 @@ def 击杀模拟(gun, ammo, part, dist, 护甲=None, 玩家生命=PLAYER_HP, 上
         记录.append((shots, 肉伤, 甲伤, 前, 甲值, hp))
     用时 = 射击用时(gun, shots) if (gun.射速 and shots > 1) else (0.0 if shots == 1 else None)
     return shots, 用时, hp, 甲值, 记录
+
+
+def 破甲血量(gun, ammo, dist, 甲级, 甲值, 部位="胸"):
+    """连续命中该部位直至破甲，返回 (破甲发数, 破甲累计肉伤, 破甲后剩余血量, 明细)。"""
+    if not 甲级 or not 甲值 or 甲值 <= 0:
+        return 0, 0.0, PLAYER_HP, {"理论甲伤": 0.0, "穿透比例": 1.0}
+    cur, 累计, n, 理论 = float(甲值), 0.0, 0, 0.0
+    while cur > 1e-9 and n < 200:
+        肉伤, 甲伤, d = 单发结算(gun, ammo, 部位, dist, 甲级, cur)
+        理论 = d["理论甲伤"]
+        n += 1
+        cur = max(0.0, cur - 甲伤)
+        累计 += 肉伤
+    return n, 累计, max(0.0, PLAYER_HP - 累计), {
+        "理论甲伤": 理论, "穿透比例": 穿透比例(ammo.穿透等级, 甲级)}
+
+
+def _破甲致死发数(gun, ammo, dist, 甲级, 甲值, 部位):
+    """破甲前若躯干连打已能致死，返回致死发数；否则返回 None。"""
+    if not 甲级 or not 甲值 or 甲值 <= 0:
+        return int(math.ceil(PLAYER_HP / max(1e-9, 单发结算(gun, ammo, 部位, dist)[0])))
+    cur, 累计, n = float(甲值), 0.0, 0
+    while 累计 < PLAYER_HP - 1e-9 and n < 200:
+        肉伤, 甲伤, _ = 单发结算(gun, ammo, 部位, dist, 甲级, cur)
+        n += 1
+        cur = max(0.0, cur - 甲伤)
+        累计 += 肉伤
+    return n if 累计 >= PLAYER_HP - 1e-9 else None
+
+
+def 破甲后组合(gun, ammo, dist, 甲级, 甲值, 上限=None, 部位="胸"):
+    """先按该部位连打直至破甲，再在剩余血量上枚举 胸/腹/四肢 追加命中。
+    返回最少总发数下的全部最小击杀组合；胸腹伤害相同时自动合并为“躯干”。"""
+    b, 破甲肉, R, 明细 = 破甲血量(gun, ammo, dist, 甲级, 甲值, 部位)
+    U胸 = 单发结算(gun, ammo, "胸", dist)[0]
+    U腹 = 单发结算(gun, ammo, "腹", dist)[0]
+    U肢 = min(单发结算(gun, ammo, "手", dist)[0], 单发结算(gun, ammo, "腿", dist)[0])
+    合并 = abs(U胸 - U腹) < 1e-9
+    结果 = {"破甲发数": b, "破甲肉伤": 破甲肉, "剩余血量": R, "合并胸腹": 合并,
+            "U胸": U胸, "U腹": U腹, "U肢": U肢,
+            "理论甲伤": 明细["理论甲伤"], "穿透比例": 明细["穿透比例"]}
+    if R <= 1e-9:
+        发数 = _破甲致死发数(gun, ammo, dist, 甲级, 甲值, 部位) or b
+        结果.update({"追加最少发数": 0, "最少总发数": 发数, "最小组合": (), "已致死": True})
+        return 结果
+    cap = 上限
+    if cap is None:
+        cap = int(math.ceil(R / max(1e-9, min(U胸, U腹, U肢))) + 1)
+    全部 = []
+    for a in range(cap + 1):
+        for bb in range(cap + 1 - a):
+            for c in range(cap + 1 - a - bb):
+                if a * U胸 + bb * U腹 + c * U肢 >= R - 1e-9:
+                    全部.append((a + bb + c, a, bb, c))
+    n = min(x[0] for x in 全部)
+    最小 = sorted({(x[1], x[2], x[3]) for x in 全部 if x[0] == n})
+    if 合并:
+        最小 = sorted({(a + bb, 0, c) for a, bb, c in 最小})
+    结果.update({"追加最少发数": n, "最少总发数": b + n, "最小组合": tuple(最小), "已致死": False})
+    return 结果
+
+
+def _组合文字(组合, 合并):
+    a, bb, c = 组合
+    段 = []
+    if 合并:
+        if a + bb:
+            段.append(f"躯干{a + bb}")
+    else:
+        if a:
+            段.append(f"胸{a}")
+        if bb:
+            段.append(f"腹{bb}")
+    if c:
+        段.append(f"四肢{c}")
+    return "+".join(段) if 段 else "0"
 
 
 def fmt(x):
@@ -478,6 +607,49 @@ def cmd_矩阵(a):
                             fmt(用时) if 用时 is not None else ""])
 
 
+def cmd_耐久(a):
+    guns, ammos, _ = load_all()
+    gun = _find(guns, a.枪, "枪械")
+    ammo = _find(ammos, a.弹, "弹药")
+    lo, hi = [float(x) for x in str(a.甲值范围).replace("～", "-").split("-")]
+    if hi < lo:
+        lo, hi = hi, lo
+    点, d = [], lo
+    while d <= hi + 1e-9:
+        点.append(round(d, 6))
+        d += a.步长
+    结果 = [(D, 破甲后组合(gun, ammo, a.距离, a.甲, D, a.上限, a.部位)) for D in 点]
+    首 = 结果[0][1]
+    print(f"{gun.名称} + {ammo.名称}(穿透{ammo.穿透等级}) @{fmt(a.距离)}m，破甲攻击部位{a.部位}")
+    print(f"甲{a.甲}: 每发理论甲伤{fmt(首['理论甲伤'])}，穿透比例{fmt(首['穿透比例'])}"
+          f" | 单发无甲肉伤 胸{fmt(首['U胸'])} 腹{fmt(首['U腹'])} 四肢{fmt(首['U肢'])}"
+          + ("（胸腹同伤，合并为躯干）" if 首["合并胸腹"] else ""))
+    print("耐久区间 | 破甲发数 | 破甲累计肉伤 | 破甲后剩余 | 追加最少发数→最少总发数 | 该发数下的最小击杀组合")
+    组 = []
+    for D, r in 结果:
+        键 = (r["破甲发数"], r["追加最少发数"], r["最小组合"], r["已致死"],
+              r["最少总发数"] if r["已致死"] else 0)
+        if 组 and 组[-1]["键"] == 键:
+            组[-1]["止"] = D
+            组[-1]["R止"] = r["剩余血量"]
+        else:
+            组.append({"键": 键, "起": D, "止": D, "样本": r,
+                      "R起": r["剩余血量"], "R止": r["剩余血量"]})
+    for 段 in 组:
+        r = 段["样本"]
+        起, 止 = 段["起"], 段["止"]
+        区间 = fmt(起) if abs(止 - 起) < 1e-9 else f"{fmt(起)}–{fmt(止)}"
+        if r["已致死"]:
+            print(f" {区间} | {r['破甲发数']} | — | 破甲前已致死 | 全躯干"
+                  f"{r['最少总发数']}发")
+            continue
+        R起, R止 = 段["R起"], 段["R止"]
+        剩 = fmt(R起) if abs(R起 - R止) < 1e-9 else f"{fmt(min(R起, R止))}–{fmt(max(R起, R止))}"
+        组合 = "、".join(_组合文字(c, r["合并胸腹"]) for c in r["最小组合"])
+        print(f" {区间} | {r['破甲发数']} | {fmt(r['破甲肉伤'])} | {剩} "
+              f"| {r['追加最少发数']}→{r['最少总发数']} | {组合}")
+
+
 def _add_target_args(p):
     p.add_argument("--枪", required=True, help="枪械名称，见 guns.csv")
     p.add_argument("--弹", required=True, help="弹药名称，见 ammo.csv")
@@ -508,8 +680,18 @@ def main():
     p4.add_argument("--部位", choices=PARTS, default="胸")
     p4.add_argument("--甲位", choices=["身", "头"], default="身")
 
+    p5 = sub.add_parser("耐久", help="按护甲耐久扫描破甲后血量与胸/腹/四肢击杀组合变化")
+    p5.add_argument("--枪", required=True, help="枪械名称，见 guns.csv")
+    p5.add_argument("--弹", required=True, help="弹药名称，见 ammo.csv")
+    p5.add_argument("--甲", type=int, required=True, help="护甲等级1-6(决定穿透比例与甲伤)")
+    p5.add_argument("--距离", type=float, default=10)
+    p5.add_argument("--甲值范围", default="60-160", help="耐久扫描区间，如 60-160")
+    p5.add_argument("--步长", type=float, default=1.0)
+    p5.add_argument("--部位", choices=["胸", "腹"], default="胸", help="破甲攻击部位(默认胸)")
+    p5.add_argument("--上限", type=int, default=None, help="追加发数上限，默认按剩余血量推算")
+
     a = p.parse_args()
-    {"列表": cmd_列表, "单发": cmd_单发, "击杀": cmd_击杀, "矩阵": cmd_矩阵}[a.cmd](a)
+    {"列表": cmd_列表, "单发": cmd_单发, "击杀": cmd_击杀, "矩阵": cmd_矩阵, "耐久": cmd_耐久}[a.cmd](a)
 
 
 if __name__ == "__main__":

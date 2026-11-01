@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""散布-部位-击杀 Monte Carlo 模拟 (hit_sim)
+"""定位散布-部位-击杀 Monte Carlo 模拟 (hit_sim)
 
 在 damage_calc.py 的伤害公式之上加入弹着散布与部位判定, 输出 BTK/TTK 概率分布.
 
-散布模型 (几何按参考图 475×608 像素实测: 椭圆中心 (239,270.5), 190px = 1 单位):
-    共 4 条同心椭圆(最外 = 100% 散布半径, 向内约 82% / 58% / 40%),
+定位散布 (首发落点; 几何按参考图 475×608 像素实测: 椭圆中心 (239,270.5), 190px = 1 单位):
+    共 4 条同心椭圆(最外 = 100% 定位散布半径, 向内约 82% / 58% / 40%),
     最内椭圆 50%, 外 3 个环带均分其余 50%(各 ≈16.7%), 区域内按面积均匀落点.
     参考图为 3D 透视投影, 各环圆心逐环略上移, 故逐环记录 (cx, cy, a, b).
 部位判定 (归一化坐标, 原点=椭圆中心即胸腹交界, y向下为正, 先矩形后胶囊):
-    头/胸/腹为矩形(胸腹取参考图蓝框), 左右臂与左右腿为胶囊(线段+半宽, 贴合斜向肢体),
-    判定区外其余=空枪.
-后继弹两种模型:
-    A 相关模型: 锚点=最近一次"重锚"落点, 后续弹以锚点为圆心按正圆散布
-                (半径=主散布水平半轴×FOLLOW_SCALE, 圆心不偏移), 4 段同心圆的概率按
+    头/胸/腹为矩形(取参考图蓝框, 头胸分界与胸腹分界都统一到同一水平线, 不留缝隙);
+    肩/手臂/腿为胶囊(线段+半宽): 肩胶囊 = 手臂上段(与手胶囊同线同半径, 完全重叠),
+    再以胸腹分界线截断 —— 分界以上算肩、以下算手; 腿胶囊以腹下缘截断 —— 以上不判腿
+    (腹内部分先被判腹, 腹侧露出的胶囊帽判空枪); 判定区外其余=空枪.
+两种散布:
+    控枪散布: 锚点=最近一次"重锚"落点, 后续弹以锚点为圆心按正圆取点
+                (半径=定位散布水平半轴×FOLLOW_SCALE, 圆心不偏移), 4 段同心圆的概率按
                 FOLLOW_WEIGHTS 由外向内递增; 若连续 重锚空枪数 发空枪, 说明锚点已明显
-                偏离人体, 则下一发重新按首发判定(回到主散布 RINGS)并成为新锚点,
+                偏离人体, 则下一发重新按定位散布判定并成为新锚点,
                 避免整梭跟着偏离点一路打空;
-    B 独立模型: 每发与第一发独立同分布.
+    定位散布: 每发与第一发独立同分布(都按定位散布取点).
 结算规则:
-    胸->身甲; 腹->身甲(若该甲防护腹部); 头/手/腿->无甲; 空枪->无结算但占射击间隔.
+    胸->身甲; 腹->身甲(若该甲防护腹部); 肩->身甲(若该甲防护肩部, 否则无甲);
+    头/手/腿->无甲; 空枪->无结算但占射击间隔.
     BTK = 击杀所需发射数(含空枪); TTK = 逐发累加间隔(默认 60/射速, 特殊射速/连发分组
     曲线见 damage_calc.射击用时); 超过上限记未击杀.
 
@@ -50,24 +53,31 @@ RINGS = [  # (cx, cy, a, b) 外→内: 圆心偏移 + 水平/垂直半轴
 ]
 RING_PROB = [0.5 / 3, 0.5 / 3, 0.5 / 3, 0.5]   # 各区域概率(外→内): 最内 50%, 外三环均分 50%
 
+头胸分界 = -0.668                         # 头/胸矩形的共用水平分界(原蓝框 -0.671/-0.666 之间 0.005 的缝隙已合并)
+胸腹分界 = -0.245                         # 胸/腹矩形的共用水平分界(原蓝框 -0.261/-0.229 之间 0.032 的缝隙已合并)
+腹下缘 = 0.476                            # 腹底/腿顶的水平线: 腿只从这条线往下算, 以上的胶囊帽不判腿
+
 RECTS = [  # (部位, x0, x1, y0, y1) 按列表顺序判定; 头为头盔外廓, 胸/腹取参考图蓝框
-    ("头", -0.290, 0.258, -1.203, -0.671),
-    ("胸", -0.332, 0.321, -0.666, -0.261),
-    ("腹", -0.337, 0.316, -0.229, 0.476),
+    ("头", -0.290, 0.258, -1.203, 头胸分界),
+    ("胸", -0.332, 0.321, 头胸分界, 胸腹分界),
+    ("腹", -0.337, 0.316, 胸腹分界, 腹下缘),
 ]
 BANDS = [  # (部位, x1, y1, x2, y2, 半宽) 胶囊判定(线段+半宽), 在 RECTS 之后判定
-    ("手", -0.479, -0.476, -0.858, 0.524, 0.130),   # 左臂(自肩斜向下外)
+    ("肩", -0.479, -0.476, -0.5665, 胸腹分界, 0.130),   # 左肩 = 左臂上段(与手同线同半径完全重叠), 胶囊终点落在胸腹分界
+    ("肩",  0.479, -0.476,  0.5665, 胸腹分界, 0.130),   # 右肩
+    ("手", -0.479, -0.476, -0.858, 0.524, 0.130),   # 左臂(整条; 肩优先且以分界线截断, 分界以下归手)
     ("手",  0.479, -0.476,  0.858, 0.524, 0.130),   # 右臂
-    ("腿", -0.218,  0.476, -0.218, 1.776, 0.171),   # 左腿(腹下缘至脚底)
-    ("腿",  0.279,  0.476,  0.279, 1.776, 0.171),   # 右腿
+    ("腿", -0.2485, 腹下缘, -0.2485, 1.776, 0.171),   # 左腿(腹下缘至脚底; 与右腿关于 x=0 对称)
+    ("腿",  0.2485, 腹下缘,  0.2485, 1.776, 0.171),   # 右腿
 ]
 
-FOLLOW_SCALE = 0.35                         # 模型A: 后继散布半径=主散布水平半轴×0.35 (原 0.5 再收 30%)
-FOLLOW_WEIGHTS = [0.1, 0.2, 0.3, 0.4]       # 模型A: 同心圆环概率(外→内递增, 即离锚点越近越密)
-FOLLOW_RINGS = [  # (0, 0, r, r) 正圆环系: 主散布椭圆含参考图3D透视拉伸, 不适用于后继独立密度图
-    (0.0, 0.0, a * FOLLOW_SCALE, a * FOLLOW_SCALE) for _, _, a, _ in RINGS
+FOLLOW_SCALE = 0.2061                       # 控枪散布: 最外圈半径=定位散布水平半轴×0.2061 (原 0.2625; 四区按 10/20/30/40% 收窄后整体再缩 ~21.5%)
+FOLLOW_RATIOS = [1.0, 0.8725, 0.6857, 0.4528]   # 各圈半径/最外圈: 中心圆盘与三环宽度由内到外 0.0933 / 0.0480 / 0.0385 / 0.0263, 严格递减
+FOLLOW_WEIGHTS = [0.1, 0.2, 0.3, 0.4]       # 控枪散布: 同心圆环概率(外→内递增, 即离锚点越近越密)
+FOLLOW_RINGS = [  # (0, 0, r, r) 正圆环系: 定位散布椭圆含参考图3D透视拉伸, 不适用于后继独立密度图
+    (0.0, 0.0, a * FOLLOW_SCALE, a * FOLLOW_SCALE) for a in FOLLOW_RATIOS
 ]
-重锚空枪数 = 2                              # 模型A: 连续这么多发空枪后, 下一发按首发重取(回主散布)并成为新锚点
+重锚空枪数 = 2                              # 控枪散布: 连续这么多发空枪后, 下一发按首发重取(回定位散布)并成为新锚点
 
 PLAYER_HP = 100.0
 SHOT_CAP = 120                              # 单次模拟发射上限(超过记未击杀)
@@ -80,13 +90,18 @@ SHOT_CAP = 120                              # 单次模拟发射上限(超过记
     (5, 95.0,  "DICH-1战术头盔"), (5, 95.0,  "H09防暴头盔"), (5, 95.0,  "GN重型头盔"), (5, 95.0,  "DICH训练头盔"),
     (5, 105.0, "DICH-1战术头盔"), (5, 105.0, "H09防暴头盔"), (5, 105.0, "GN重型头盔"), (5, 105.0, "DICH训练头盔"),
     (5, 125.0, "DICH-1战术头盔"), (5, 125.0, "H09防暴头盔"), (5, 125.0, "GN重型头盔"), (5, 125.0, "DICH训练头盔"),
+    # 6级甲只搭配6级头(60 / 55 / 50), 并且只由5级穿透弹参与(低于5级的弹打6甲无意义)
+    (6, 115.0, "GT5指挥官头盔"), (6, 115.0, "H70精英头盔"), (6, 115.0, "DICH-9重型头盔"),
+    (6, 125.0, "GT5指挥官头盔"), (6, 125.0, "H70精英头盔"), (6, 125.0, "DICH-9重型头盔"),
+    (6, 140.0, "GT5指挥官头盔"), (6, 140.0, "H70精英头盔"), (6, 140.0, "DICH-9重型头盔"),
+    (6, 150.0, "GT5指挥官头盔"), (6, 150.0, "H70精英头盔"), (6, 150.0, "DICH-9重型头盔"),
     (None, None, None),   # 无甲目标: 无身甲无头盔(基线), 置于末尾
 ]
 
 
 # ---------------------------------------------------------------- 落点与判定
 def 落点(rng, 环=None, rings=None, 权重=None):
-    """采样一个落点(归一化坐标)。rings=None 用主散布 RINGS(椭圆), 后继散布改传 FOLLOW_RINGS(正圆)。
+    """采样一个落点(归一化坐标)。rings=None 用定位散布 RINGS(椭圆), 控枪散布改传 FOLLOW_RINGS(正圆)。
     环=None 时按 权重(默认 RING_PROB) 抽取区域; 区域内按面积均匀, 落到内侧环内则重取(拒绝采样)。"""
     if rings is None:
         rings = RINGS
@@ -120,14 +135,18 @@ def 部位判定(x, y):
             return p
     for p, x1, y1, x2, y2, r in BANDS:
         if _胶囊内(x, y, x1, y1, x2, y2, r):
+            if p == "肩" and y > 胸腹分界:   # 肩只覆盖分界线以上, 以下的臂段归手
+                continue
+            if p == "腿" and y < 腹下缘:     # 腿只从腹下缘开始: 以上的胶囊帽(腹内归腹, 腹侧归空枪)都不判腿
+                continue
             return p
     return "空枪"
 
 
 def 次发(rng, 模型, 锚, 连空):
     """产出下一发的 (x, y, 部位, 新锚, 新连空, 是否重锚), 三处调用点共用同一规则。
-    模型B 各发独立同分布; 模型A 以锚点为圆心取后继散布, 连续 重锚空枪数 发空枪后
-    该发回到主散布(即"按首发判定")并成为新锚点(重锚=1)。"""
+    定位散布 各发独立同分布; 控枪散布 以锚点为圆心取后继落点, 连续 重锚空枪数 发空枪后
+    该发回到定位散布(即"按首发判定")并成为新锚点(重锚=1)。"""
     if 模型 == "B" or 锚 is None or 连空 >= 重锚空枪数:
         x, y = 落点(rng)
         新锚 = (x, y)
@@ -165,8 +184,9 @@ def 甲键(part, 身甲, 头甲):
 
 
 # ---------------------------------------------------------------- 单次模拟
-def 模拟一次(gun, ammo, 身甲, 头甲, dist, rng, 模型):
-    """返回 (发射数, 击杀用时s 或 None=未击杀)。身甲与头盔各自独立损耗。"""
+def 模拟一次(gun, ammo, 身甲, 头甲, dist, rng, 模型, 飞行=0.0):
+    """返回 (发射数, 击杀总用时s 或 None=未击杀)。总用时 = 射击用时 + 弹丸飞行时间。
+    身甲与头盔各自独立损耗。"""
     hp, 发射 = PLAYER_HP, 0
     甲值 = [0.0, 身甲.护甲值 if 身甲 else 0.0, 头甲.护甲值 if 头甲 else 0.0]
     甲级 = [None, 身甲.等级 if 身甲 else None, 头甲.等级 if 头甲 else None]
@@ -180,16 +200,17 @@ def 模拟一次(gun, ammo, 身甲, 头甲, dist, rng, 模型):
             if k:
                 甲值[k] = max(0.0, 甲值[k] - 甲伤)
             hp -= 肉伤
-    用时 = dc.射击用时(gun, 发射) if hp <= 1e-9 else None
+    用时 = (dc.射击用时(gun, 发射) + 飞行) if hp <= 1e-9 else None
     return 发射, 用时
 
 
 def 模拟批量(gun, ammo, 身甲, 头甲, dist, 模型, n, seed):
     rng = random.Random(seed)
+    飞行 = dc.飞行时间(gun, dist)
     btk_hist = {}
     ttk_list, 未杀 = [], 0
     for _ in range(n):
-        发射, 用时 = 模拟一次(gun, ammo, 身甲, 头甲, dist, rng, 模型)
+        发射, 用时 = 模拟一次(gun, ammo, 身甲, 头甲, dist, rng, 模型, 飞行)
         btk_hist[发射] = btk_hist.get(发射, 0) + 1
         if 用时 is None:
             未杀 += 1
@@ -263,13 +284,14 @@ _REPLAY_TEMPLATE = """<!DOCTYPE html>
  .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
 </style></head><body>
 <div class="left">
-<h2>__TITLE__ &nbsp;|&nbsp; 模型__MODEL__ __MODELDESC__</h2>
+<h2>__TITLE__ &nbsp;|&nbsp; __MODEL__ __MODELDESC__</h2>
 <svg id="svg" viewBox="-1.15 -1.26 2.30 3.02" width="560" height="735"></svg>
 <div class="panel legend">
- 散布椭圆系: 4 条同心椭圆(外→内 100% / 82% / 58% / 40% 半径), 最内圈50%、外三环各≈16.7% &nbsp;|&nbsp;
+ 定位散布: 4 条同心椭圆(外→内 100% / 82% / 58% / 40% 半径), 最内圈50%、外三环各≈16.7% &nbsp;|&nbsp;
  <span class="sw" style="background:#e74c3c"></span>头
  <span class="sw" style="background:#e67e22"></span>胸
  <span class="sw" style="background:#f1c40f"></span>腹
+ <span class="sw" style="background:#16a085"></span>肩
  <span class="sw" style="background:#3498db"></span>手
  <span class="sw" style="background:#9b59b6"></span>腿
  <span class="sw" style="background:#6b7280"></span>空枪
@@ -290,7 +312,7 @@ _REPLAY_TEMPLATE = """<!DOCTYPE html>
  <div id="status"></div>
 </div>
 <div class="panel">
- <h2 id="ftitle">后继落点密度 (模型__MODEL__)</h2>
+ <h2 id="ftitle">后继落点密度（__MODEL__）</h2>
 <!-- 与左侧主图同比例尺: 主图 viewBox 宽 2.30 单位 × 560px = 243.5 px/单位, 小图 1.16 单位 × 243.5 ≈ 282.4px -->
  <svg id="fsvg" viewBox="-0.58 -0.58 1.16 1.16" width="282.43" height="282.43" style="margin:0 auto"></svg>
  <div class="legend" id="flegend"></div>
@@ -301,7 +323,7 @@ _REPLAY_TEMPLATE = """<!DOCTYPE html>
 </div>
 <script>
 const D = __PAYLOAD__;
-const COLORS = {"头":"#e74c3c","胸":"#e67e22","腹":"#f1c40f","手":"#3498db","腿":"#9b59b6","空枪":"#6b7280"};
+const COLORS = {"头":"#e74c3c","胸":"#e67e22","腹":"#f1c40f","肩":"#16a085","手":"#3498db","腿":"#9b59b6","空枪":"#6b7280"};
 const svg = document.getElementById("svg"), NS = "http://www.w3.org/2000/svg";
 function el(tag, attrs, text){ const e = document.createElementNS(NS, tag);
  for(const k in attrs) e.setAttribute(k, attrs[k]); if(text!=null) e.textContent = text; svg.appendChild(e); return e; }
@@ -310,10 +332,25 @@ el("ellipse",{cx:0,cy:0,rx:D.rings[0][2]*1.02,ry:D.rings[0][3]*1.02,fill:"#1a1e2
 D.rects.forEach(r=>{ el("rect",{x:r[1],y:r[3],width:r[2]-r[1],height:r[4]-r[3],fill:"#2a3140",stroke:"#3a4356","stroke-width":0.010}); });
 D.bands.forEach(b=>{ el("line",{x1:b[1],y1:b[2],x2:b[3],y2:b[4],stroke:"#2a3140","stroke-width":2*b[5],"stroke-linecap":"round"}); });
 D.rects.forEach(r=>{ el("rect",{x:r[1],y:r[3],width:r[2]-r[1],height:r[4]-r[3],fill:COLORS[r[0]],opacity:0.16,stroke:COLORS[r[0]],"stroke-width":0.006}); });
-D.bands.forEach(b=>{ el("line",{x1:b[1],y1:b[2],x2:b[3],y2:b[4],stroke:COLORS[b[0]],opacity:0.22,"stroke-width":2*b[5],"stroke-linecap":"round"}); });
+// 肩与手共用同一条手臂胶囊; 手先画、肩后画并裁到胸腹分界以上, 避免手的蓝色盖住肩
+const defs = document.createElementNS(NS,"defs"), cp = document.createElementNS(NS,"clipPath");
+cp.id = "seamClip"; const cr = document.createElementNS(NS,"rect");
+cr.setAttribute("x","-1.2"); cr.setAttribute("y","-1.4"); cr.setAttribute("width","2.4");
+cr.setAttribute("height",(1.4+D.seam).toFixed(4)); cp.appendChild(cr); defs.appendChild(cp); svg.appendChild(defs);
+// 腿只从腹下缘往下画: 以上的胶囊帽判定时归腹(腹内)或空枪(腹侧), 不画
+const legTop = D.rects.find(r=>r[0]==="腹")[4];
+const lcp = document.createElementNS(NS,"clipPath"); lcp.id = "legClip";
+const lcr = document.createElementNS(NS,"rect"); lcr.setAttribute("x","-1.2");
+lcr.setAttribute("y", legTop.toFixed(4)); lcr.setAttribute("width","2.4");
+lcr.setAttribute("height",(1.9-legTop).toFixed(4)); lcp.appendChild(lcr); defs.appendChild(lcp);
+const seamLayer = document.createElementNS(NS,"g"); seamLayer.setAttribute("clip-path","url(#seamClip)"); svg.appendChild(seamLayer);
+function sel(tag, attrs){ const e = document.createElementNS(NS, tag);
+ for(const k in attrs) e.setAttribute(k, attrs[k]); seamLayer.appendChild(e); return e; }
+D.bands.filter(b=>b[0]!=="肩").forEach(b=>{ el("line",{x1:b[1],y1:b[2],x2:b[3],y2:b[4],stroke:COLORS[b[0]],opacity:0.22,"stroke-width":2*b[5],"stroke-linecap":"round","clip-path":b[0]==="腿"?"url(#legClip)":"none"}); });
+D.bands.filter(b=>b[0]==="肩").forEach(b=>{ sel("line",{x1:b[1],y1:b[2],x2:b[3],y2:b[4],stroke:COLORS[b[0]],opacity:0.30,"stroke-width":2*b[5],"stroke-linecap":"round"}); });
 D.rings.forEach((g,i)=>{ el("ellipse",{cx:g[0],cy:g[1],rx:g[2],ry:g[3],fill:"none",stroke:"#e05252","stroke-width":i==0?0.012:0.007,opacity:i==0?0.95:0.65}); });
 D.rects.forEach(r=>{ el("text",{x:(r[1]+r[2])/2,y:(r[3]+r[4])/2+0.03,"font-size":0.07,fill:COLORS[r[0]],"text-anchor":"middle",opacity:0.85}, r[0]); });
-[["手",-0.67,0.02],["腿",-0.22,0.77]].forEach(t=>{ el("text",{x:t[1],y:t[2],"font-size":0.07,fill:COLORS[t[0]],"text-anchor":"middle",opacity:0.85}, t[0]); });
+[["肩",-0.78,-0.34],["肩",0.78,-0.34],["手",-0.67,0.02],["腿",-0.2485,0.77]].forEach(t=>{ el("text",{x:t[1],y:t[2],"font-size":0.07,fill:COLORS[t[0]],"text-anchor":"middle",opacity:0.85}, t[0]); });
 if(D.model==="A"){ el("line",{x1:-0.04,y1:0,x2:0.04,y2:0,stroke:"#e05252","stroke-width":0.006}); el("line",{x1:0,y1:-0.04,x2:0,y2:0.04,stroke:"#e05252","stroke-width":0.006}); }
 // 后继落点密度小图(固定中心=锚点), 同心圆按 FOLLOW_WEIGHTS 深浅着色
 const fx = document.getElementById("fsvg"), flegend = document.getElementById("flegend");
@@ -322,15 +359,15 @@ function fel(tag, attrs, text){ const e = document.createElementNS(NS, tag);
 (function(){
  const F = D.follow;
  if(D.model !== "A" || !F){ document.getElementById("ftitle").textContent = "后继落点密度";
-   flegend.innerHTML = '<span style="color:#8fa3c0">模型B 各发独立同分布, 无后继锚定散布</span>'; return; }
+   flegend.innerHTML = '<span style="color:#8fa3c0">定位散布：各发独立同分布，无后继锚定</span>'; return; }
  const wmax = Math.max.apply(null, F.weights), op = w => 0.10 + 0.50 * w / wmax;
  fel("ellipse", {cx:0, cy:0, rx:F.rings[0][2]*1.06, ry:F.rings[0][3]*1.06, fill:"#1a1e28"});
  F.rings.forEach((g,i) => { fel("ellipse", {cx:g[0], cy:g[1], rx:g[2], ry:g[3], fill:"#e08a3c", "fill-opacity":op(F.weights[i]).toFixed(3)}); });
  F.rings.forEach(g => { fel("ellipse", {cx:g[0], cy:g[1], rx:g[2], ry:g[3], fill:"none", stroke:"#e08a3c", "stroke-width":0.012, opacity:0.8}); });
  fel("circle", {cx:0, cy:0, r:0.022, fill:"#e05252", stroke:"#fff", "stroke-width":0.006});
- flegend.innerHTML = '<span class="sw" style="background:#e05252"></span>锚点(最近重锚) &nbsp; 半径 = 主散布水平半径 × ' + F.scale
+ flegend.innerHTML = '<span class="sw" style="background:#e05252"></span>锚点(最近重锚) &nbsp; 半径 = 定位散布水平半径 × ' + F.scale
    + '<br>同心圆(外→内) 概率 ' + F.weights.map(w => '<span class="sw" style="background:#e08a3c;opacity:' + op(w).toFixed(3) + '"></span>' + (w*100).toFixed(0) + '%').join(" ")
-   + '<br>连续 ' + F.reanchor + ' 发空枪后, 下一发回到主散布重新取锚点 (红虚线圈 = 该重锚发)';
+   + '<br>连续 ' + F.reanchor + ' 发空枪后, 下一发回到定位散布重新取锚点 (红虚线圈 = 该重锚发)';
 })();
 const layer = el("g",{});
 // 回放状态
@@ -394,11 +431,12 @@ def 导出回放HTML(gun, ammo, 身甲, 头甲, dist, 模型, seed, 路径):
         "rects": [[p, x0, x1, y0, y1] for p, x0, x1, y0, y1 in RECTS],
         "bands": [[p, x1, y1, x2, y2, r] for p, x1, y1, x2, y2, r in BANDS],
         "rings": [list(g) for g in RINGS],
+        "seam": 胸腹分界,
         "follow": {"scale": FOLLOW_SCALE, "weights": FOLLOW_WEIGHTS,
                    "reanchor": 重锚空枪数,
                    "rings": [list(g) for g in FOLLOW_RINGS]},
     }
-    desc = (f"(锚定最近重锚落点, 后继弹向周围概率递减, 连空{重锚空枪数}发回主散布重取)"
+    desc = (f"(锚定最近重锚落点, 后继弹向周围概率递减, 连空{重锚空枪数}发回定位散布重取)"
             if 模型 == "A" else "(各发独立同分布)")
     头盔 = f" + 头盔[{头甲.名称}]{头值:.0f}耐久" if 头甲 else " (无头盔)"
     title = (f"{gun.名称} × {ammo.名称} vs {身甲.等级}级身甲[{身甲.名称}]{身值:.0f}耐久{头盔}"
@@ -406,7 +444,7 @@ def 导出回放HTML(gun, ammo, 身甲, 头甲, dist, 模型, seed, 路径):
     html = (_REPLAY_TEMPLATE
             .replace("__PAYLOAD__", json.dumps(payload, ensure_ascii=False))
             .replace("__TITLE__", title)
-            .replace("__MODEL__", 模型)
+            .replace("__MODEL__", "控枪散布" if 模型 == "A" else "定位散布")
             .replace("__MODELDESC__", desc)
             .replace("__DUR0__", f"{身值:.0f}")
             .replace("__DURH0__", f"{头值:.0f}"))
@@ -428,11 +466,11 @@ def 打印分布(标题, res):
     t90 = f'{res["ttk90"]*1000:.0f}ms' if res["ttk90"] is not None else "-"
     tm = f'{res["ttk均值"]*1000:.0f}ms' if res["ttk均值"] is not None else "-"
     print(f"  期望BTK={res['btk均值']:.2f}  TTK均值={tm}  "
-          f"P50={t50}  P90={t90}  未击杀率={res['未杀率']*100:.2f}%")
+          f"TTK_50%分位={t50}  TTK_90%分位={t90}  未击杀率={res['未杀率']*100:.2f}%")
 
 
 # ---------------------------------------------------------------- 批量概率分布
-_部位序 = ["空枪", "头", "胸", "腹", "手", "腿"]
+_部位序 = ["空枪", "头", "胸", "腹", "肩", "手", "腿"]
 _部位码 = {p: i for i, p in enumerate(_部位序)}
 
 
@@ -466,8 +504,8 @@ def 池参数(gun, ammo, 护甲, dist, 无甲):
 
 
 def 伤害表(gun, ammo, 身甲, 头甲, dist):
-    """返回 (无甲[6], 池{1:身甲池, 2:头盔池})。身甲与头盔各自独立破甲, 互不相干。"""
-    无甲 = [0.0] * 6
+    """返回 (无甲[len(_部位序)], 池{1:身甲池, 2:头盔池})。身甲与头盔各自独立破甲, 互不相干。"""
+    无甲 = [0.0] * len(_部位序)
     for i, p in enumerate(_部位序):
         if p != "空枪":
             无甲[i] = dc.单发结算(gun, ammo, p, dist)[0]      # 甲级=None → 无甲肉伤
@@ -479,7 +517,7 @@ def 伤害表(gun, ammo, 身甲, 头甲, dist):
     return 无甲, 池
 
 
-_组合类别 = ("头", "胸", "腹", "四肢")     # 手/腿部位倍率恒等(89 枪全同), 合并为四肢展示
+_组合类别 = ("头", "胸", "腹", "肩", "四肢")     # 手/腿部位倍率恒等(89 枪全同), 合并为四肢展示
 
 
 def 击杀组合(无甲, 池, 身甲, 头甲, 上限=10):
@@ -488,7 +526,7 @@ def 击杀组合(无甲, 池, 身甲, 头甲, 上限=10):
     组合按 头/胸/腹/四肢 计数(手与腿倍率恒等故合并); 同一组合取"存在一种破甲次序
     可击杀"(每护甲池按最优分配: 肉伤最高的命中置于破甲发/破甲后满伤位)。
     返回长度=上限 的字符串列表(BTK1..BTK上限), 该档无可击杀组合时为 '无'。"""
-    代表 = {"头": "头", "胸": "胸", "腹": "腹", "四肢": "手"}
+    代表 = {"头": "头", "胸": "胸", "腹": "腹", "肩": "肩", "四肢": "手"}
     池别, 完, 未, 破 = [], [], [], []
     for p in _组合类别:
         cd = _部位码[代表[p]]
@@ -504,10 +542,10 @@ def 击杀组合(无甲, 池, 身甲, 头甲, 上限=10):
     b池 = {k: (池[k]["b"] if k in 池 else 0) for k in (1, 2)}
 
     def 肉伤(n):
-        """组合 n=(头,胸,腹,四肢) 的最优次序总肉伤。"""
+        """组合 n=(头,胸,腹,肩,四肢) 的最优次序总肉伤。"""
         s = 0.0
         for k in (0, 1, 2):
-            池内 = [i for i in range(4) if 池别[i] == k and n[i]]
+            池内 = [i for i in range(len(_组合类别)) if 池别[i] == k and n[i]]
             if not 池内:
                 continue
             if k == 0:                       # 无甲池: 不受破甲影响
@@ -527,30 +565,38 @@ def 击杀组合(无甲, 池, 身甲, 头甲, 上限=10):
                 s += sum(命中[i][1] for i in range(满n + 1, m))
         return s
 
+    L = len(_组合类别)
+
+    def 枚举(k, l=1):
+        """把 k 次命中分到 L 个部位类别的所有组合(和 = k)。"""
+        if l == L:
+            yield (k,)
+            return
+        for first in range(k + 1):
+            for rest in 枚举(k - first, l + 1):
+                yield (first,) + rest
+
     杀 = [set() for _ in range(上限 + 2)]
     结果 = []
     for k in range(1, 上限 + 1):
         本 = []
-        for a in range(k + 1):
-            for b_ in range(k - a + 1):
-                for c in range(k - a - b_ + 1):
-                    n = (a, b_, c, k - a - b_ - c)
-                    if 肉伤(n) < PLAYER_HP - 1e-6:
-                        continue
-                    杀[k].add(n)
-                    if k > 1 and any(        # 最小性: 任一 (k-1) 子组合可击杀则本组合非最小
-                            n[i] and tuple(n[:i] + (n[i] - 1,) + n[i + 1:]) in 杀[k - 1]
-                            for i in range(4)):
-                        continue
-                    本.append(n)
+        for n in 枚举(k):
+            if 肉伤(n) < PLAYER_HP - 1e-6:
+                continue
+            杀[k].add(n)
+            if k > 1 and any(        # 最小性: 任一 (k-1) 子组合可击杀则本组合非最小
+                    n[i] and tuple(n[:i] + (n[i] - 1,) + n[i + 1:]) in 杀[k - 1]
+                    for i in range(L)):
+                continue
+            本.append(n)
         本.sort()
         结果.append("，".join(
             "".join(f"{cnt}{名}" for 名, cnt in zip(_组合类别, n) if cnt) for n in 本) or "无")
     return 结果
 
 
-def 统计分布(seq, 次数, 部位池, 池, 无甲, gun):
-    """遍历预采样序列统计 BTK 直方图与 TTK 分位。hist 末位为未击杀(超 SHOT_CAP 发)。
+def 统计分布(seq, 次数, 部位池, 池, 无甲, gun, 飞行=0.0):
+    """遍历预采样序列统计 BTK 直方图与 TTK 分位。TTK = 射击用时 + 飞行时间(距离/初速)。
     部位池[c]=该部位命中所属护甲池(2=头盔/1=身甲/0=无甲), 身头两池各自累计命中数独立破甲。"""
     hist = [0] * (SHOT_CAP + 2)
     ttk = []
@@ -578,7 +624,7 @@ def 统计分布(seq, 次数, 部位池, 池, 无甲, gun):
                     break
         if hp <= 1e-9:
             hist[n] += 1
-            ttk.append(dc.射击用时(gun, n))
+            ttk.append(dc.射击用时(gun, n) + 飞行)
         else:
             hist[SHOT_CAP + 1] += 1
     ttk.sort()
@@ -599,7 +645,7 @@ def 弹药候选(ammos, 口径):
 
 
 def 批量概率(guns, ammos, armors, 距离列表, 模型, 次数, seed, 枪过滤=None):
-    """全枪械 × 同口径4/5级弹 × 目标甲配对(身甲×头盔 18组 + 无甲 1组) × 各距离 的 BTK/TTK 概率分布。
+    """全枪械 × 同口径4/5级弹 × 目标甲配对(身甲×头盔 30组 + 无甲 1组) × 各距离 的 BTK/TTK 概率分布。
     落点几何与枪弹/距离均无关, 故部位序列全局只预采样一次复用。身甲与头盔两池独立结算。"""
     序列 = 预采样部位(random.Random(seed + (0 if 模型 == "A" else 7777)), 次数, 模型)
     rows, 无弹枪, 无射速 = [], [], []
@@ -618,6 +664,8 @@ def 批量概率(guns, ammos, armors, 距离列表, 模型, 次数, seed, 枪过
             continue
         for ammo in cands:
             for 身级, 身值, 头名 in 目标甲配对:
+                if 身级 == 6 and ammo.穿透等级 < 5:   # 6 甲只考虑 5 级穿透弹
+                    continue
                 if 身级 is None:                 # 无甲目标: 无身甲无头盔
                     身甲 = 头甲 = None
                 else:
@@ -627,7 +675,8 @@ def 批量概率(guns, ammos, armors, 距离列表, 模型, 次数, seed, 枪过
                 for 距离 in 距离列表:
                     无甲, 池 = 伤害表(gun, ammo, 身甲, 头甲, 距离)
                     击杀 = 击杀组合(无甲, 池, 身甲, 头甲)
-                    res = 统计分布(序列, 次数, 部位池, 池, 无甲, gun)
+                    飞行 = dc.飞行时间(gun, 距离)
+                    res = 统计分布(序列, 次数, 部位池, 池, 无甲, gun, 飞行)
                     身池, 头池 = 池.get(1), 池.get(2)
                     全胸枪, 全胸用时, _, _, _ = dc.击杀模拟(gun, ammo, "胸", 距离, 身甲)
                     rows.append({
@@ -638,13 +687,15 @@ def 批量概率(guns, ammos, armors, 距离列表, 模型, 次数, seed, 枪过
                         "头级": 头甲.等级 if 头甲 else None,
                         "头耐久": 头甲.护甲值 if 头甲 else None,
                         "距离": 距离, "模型": 模型,
+                        "弹速": gun.弹速,
+                        "飞行ms": round(飞行 * 1000, 1),
                         "护腹": "是" if (身甲 and 身甲.防护腹部) else "否",
                         "身每发甲伤": round(身池["每发甲伤"], 2) if 身池 else 0.0,
                         "身破甲发数": 身池["b"] if 身池 else 0,
                         "头每发甲伤": round(头池["每发甲伤"], 2) if 头池 else 0.0,
                         "头破甲发数": 头池["b"] if 头池 else 0,
                         "全胸BTK": 全胸枪,
-                        "全胸TTKms": None if 全胸用时 is None else round(全胸用时 * 1000, 1),
+                        "全胸TTKms": None if 全胸用时 is None else round((全胸用时 + 飞行) * 1000, 1),
                         "击杀落点": 击杀,
                         **res,
                     })
@@ -656,8 +707,8 @@ def 批量概率(guns, ammos, armors, 距离列表, 模型, 次数, seed, 枪过
 
 def 输出概率长表(rows, 路径):
     """每组合一行, 含完整 BTK 直方图列(百分比, 超列上限的合并为 BTK>n%, 未击杀单列)。
-    列序: 识别列 → 甲/头(等级+耐久, 如 四甲100/四头35) → 距离 → 甲伤/破甲发数
-    → 期望BTK/TTK均值 → BTK直方图 → 未击杀%/TTK_P50/P90 → 模型/次数(末列)。"""
+    列序: 识别列 → 甲/头(等级+耐久, 如 四甲100/四头35) → 距离/弹速/初速影响
+    → 甲伤/破甲发数 → 期望BTK/TTK均值 → BTK直方图 → 未击杀%/TTK_50%分位/90%分位 → 模型/次数(末列)。"""
     if not rows:
         return 路径, 0
     maxk = 1
@@ -668,13 +719,13 @@ def 输出概率长表(rows, 路径):
                 break
     ncol = max(1, min(maxk, 30))
     head = ["枪械", "类型", "口径", "弹药", "弹级", "目标甲", "目标头",
-            "距离", "身每发甲伤", "身破甲发数", "头每发甲伤", "头破甲发数",
+            "距离", "弹速m/s", "初速影响ms", "身每发甲伤", "身破甲发数", "头每发甲伤", "头破甲发数",
             "期望BTK", "TTK均值ms", "全胸BTK", "全胸TTKms"]
     head += [f"BTK{k}击杀落点" for k in range(1, 11)]   # 忽略空枪与次序的最小击杀组合
     head += [f"BTK{k}%" for k in range(1, ncol + 1)]
     if maxk > ncol:
         head.append(f"BTK>{ncol}%")
-    head += ["未击杀%", "TTK_P50ms", "TTK_P90ms", "模型", "次数"]
+    head += ["未击杀%", "TTK_50%分位ms", "TTK_90%分位ms", "模型", "次数"]
 
     def f(v, nd=3):
         return "" if v is None else round(v, nd)
@@ -689,6 +740,7 @@ def 输出概率长表(rows, 路径):
                    "无甲" if r["甲级"] is None else f'{中文级[r["甲级"]]}甲{r["甲值"]:.0f}',
                    "无头" if r["头级"] is None else f'{中文级[r["头级"]]}头{r["头耐久"]:.0f}',
                    r["距离"],
+                   "" if r["弹速"] is None else r["弹速"], r["飞行ms"],
                    r["身每发甲伤"], r["身破甲发数"], r["头每发甲伤"], r["头破甲发数"],
                    f(r["期望BTK"], 3),
                    f(None if r["ttk均值"] is None else r["ttk均值"] * 1000, 1),
@@ -733,7 +785,7 @@ def 解析距离(文本):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="散布-部位-击杀 Monte Carlo 模拟")
+    ap = argparse.ArgumentParser(description="定位散布-部位-击杀 Monte Carlo 模拟")
     ap.add_argument("--枪", default=None, help="单枪模式必填(名称前缀匹配)")
     ap.add_argument("--弹", default=None, help="单枪模式必填(名称前缀匹配)")
     ap.add_argument("--甲", type=int, default=5, help="身甲等级, 默认5")
@@ -743,7 +795,8 @@ def main():
     ap.add_argument("--距离", default="20",
                     help="交战距离(m); 批量模式可用逗号分隔多档, 如 10,20,30,40,50,80")
     ap.add_argument("--部位", default=None, help="[调试用] 固定部位跑确定性击杀")
-    ap.add_argument("--模型", choices=["A", "B", "both"], default="both")
+    ap.add_argument("--模型", choices=["A", "B", "both"], default="both",
+                    help="A=控枪散布(后继弹锚定), B=定位散布(各发独立), both=两者都跑")
     ap.add_argument("--次数", type=int, default=None, help="Monte Carlo 次数, 单组合默认10万/批量默认2万")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--回放", nargs="?", const="hit_replay.html", default=None,
@@ -757,14 +810,15 @@ def main():
     guns, ammos, armors = dc.load_all()
 
     if args.批量:
-        # 用户确认口径: 模型A(锚定首发) + long表含完整直方图 + armor.csv 通用身甲(含其护腹标记)
+        # 用户确认口径: 控枪散布(锚定首发) + long表含完整直方图 + armor.csv 通用身甲(含其护腹标记)
         模型 = args.模型 if args.模型 in ("A", "B") else "A"
         次数 = args.次数 if args.次数 else 20000
         距离列表 = 解析距离(args.距离)
         rows, 无弹枪, 无射速 = 批量概率(guns, ammos, armors, 距离列表, 模型, 次数, args.seed, args.枪)
         路径, ncol = 输出概率长表(rows, os.path.join(BASE_DIR, args.输出))
         ds = ",".join(f"{d:g}" for d in 距离列表)
-        print(f"批量概率分布: 模型{模型} 次数{次数} 距离{ds}m (共{len(距离列表)}档)", file=sys.stderr)
+        名称 = "控枪散布" if 模型 == "A" else "定位散布"
+        print(f"批量概率分布: {名称} 次数{次数} 距离{ds}m (共{len(距离列表)}档)", file=sys.stderr)
         print(f"共 {len(set(r['枪械'] for r in rows))} 把枪 / {len(rows)} 数据行 "
               f"(直方图列 BTK1..BTK{ncol}) → {路径}", file=sys.stderr)
         if 无弹枪:
@@ -803,7 +857,8 @@ def main():
     models = ["A", "B"] if args.模型 == "both" else [args.模型]
     for m in models:
         res = 模拟批量(gun, ammo, 身甲, 头甲, 距离, m, 次数, args.seed)
-        打印分布(f"模型{'A(相关:锚定最近落点, 连空2发回主散布)' if m == 'A' else 'B(独立同分布)'}", res)
+        打印分布("控枪散布(锚定最近落点, 连空{}发回定位散布重取)".format(重锚空枪数)
+                 if m == "A" else "定位散布(各发独立同分布)", res)
 
 
 if __name__ == "__main__":

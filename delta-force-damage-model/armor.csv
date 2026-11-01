@@ -10,9 +10,9 @@
 特里克MAS2.0装甲,身,6,125,1,1,sjzwiki/kkrb
 HA-2重型防弹衣,身,6,115,1,1,sjzwiki/kkrb
 重型突击背心,身,5,125,1,1,sjzwiki/kkrb
-Hvk-2防弹衣,身,5,115,1,1,sjzwiki/kkrb
-FS复合防弹衣,身,5,105,1,1,拆解文验算用护甲
-精英防弹背心,身,5,95,1,1,sjzwiki/kkrb
+Hvk-2防弹衣,身,5,115,1,0,sjzwiki/kkrb；5级115不护肩
+FS复合防弹衣,身,5,105,1,0,拆解文验算用护甲；5级105不护肩
+精英防弹背心,身,5,95,1,0,sjzwiki/kkrb；5级95不护肩
 MK-2战术背心,身,4,110,1,0,sjzwiki/kkrb
 DT-AVS防弹衣,身,4,100,1,0,sjzwiki/kkrb
 突击手防弹背心,身,4,90,1,0,sjzwiki/kkrb
