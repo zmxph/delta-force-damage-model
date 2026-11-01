@@ -3,8 +3,8 @@ __pycache__/
 *.py[cod]
 *.csv.tmp
 
-# 生成/二进制产物
-*.xlsx
+# 生成/二进制产物（原版长表 67 MB 不入库，成品决策版 xlsx 收录）
+delta-force-damage-model/ttk_btk_概率长表.csv
 hit_replay.html
 
 # 原始录屏与剪辑工程（体积大且含版权素材）
